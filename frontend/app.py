@@ -21,10 +21,8 @@ Section markers make each boundary explicit.
 
 import os
 import sys
-import shutil
 import tempfile
-import uuid
-from datetime import datetime
+from html import escape
 from pathlib import Path
 
 import streamlit as st
@@ -67,100 +65,131 @@ st.set_page_config(
 _CSS = """
 <style>
 :root {
-    --bg: #F7F7F8;
-    --surface: #FFFFFF;
-    --surface-hover: #F0F0F3;
-    --border: #E3E3E7;
-    --text: #1A1A1E;
-    --text-muted: #6E6E78;
-    --accent: #4F5FFF;
-    --accent-soft: #EEF0FF;
-    --danger: #E5484D;
-    --danger-soft: #FDECEC;
-    --success: #2F9E5B;
-    --radius-sm: 8px;
-    --radius-md: 12px;
+    --bg: #f8f7f3;
+    --surface: #fdfcf9;
+    --surface-subtle: #f1efe9;
+    --surface-hover: #ebe8e0;
+    --border: #e5e1d8;
+    --border-strong: #d4cec2;
+    --text: #26241f;
+    --text-muted: #746f65;
+    --accent: #765c46;
+    --accent-hover: #624a38;
+    --accent-soft: #eee7df;
+    --danger: #a84949;
+    --danger-soft: #f6e8e6;
+    --success: #4f755e;
+    --shadow: 0 10px 35px rgba(56, 48, 38, 0.055);
+    --radius-sm: 10px;
+    --radius-md: 14px;
+    --radius-lg: 20px;
 }
-[data-kw-theme="dark"] {
-    --bg: #16161A;
-    --surface: #1E1E23;
-    --surface-hover: #26262D;
-    --border: #2C2C33;
-    --text: #ECECF0;
-    --text-muted: #98989F;
-    --accent: #7C8CFF;
-    --accent-soft: rgba(124, 140, 255, 0.14);
-    --danger: #F87171;
-    --danger-soft: rgba(248, 113, 113, 0.12);
-    --success: #4ADE80;
+.stApp {
+    background: var(--bg); color: var(--text);
+    font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
-.stApp { background: var(--bg); color: var(--text); }
 #MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; height: 0; }
+.block-container { max-width: 860px; padding-top: 2.25rem; padding-bottom: 7rem; }
 
-section[data-testid="stSidebar"] { background: var(--surface); border-right: 1px solid var(--border); }
-
-.kw-logo-row { display: flex; align-items: center; gap: 10px; margin-bottom: 2px; }
-.kw-logo-mark {
-    width: 30px; height: 30px; border-radius: var(--radius-sm); background: var(--accent);
-    display: flex; align-items: center; justify-content: center; color: white;
-    font-weight: 700; font-size: 15px; flex-shrink: 0;
+section[data-testid="stSidebar"] {
+    background: var(--surface);
+    border-right: 0;
+    box-shadow: 1px 0 0 var(--border);
 }
-.kw-logo-title { font-size: 16px; font-weight: 600; color: var(--text); }
-.kw-logo-subtitle { font-size: 12px; color: var(--text-muted); margin-bottom: 14px; }
+section[data-testid="stSidebar"] > div { padding-top: 1.5rem; }
+
+.kw-logo-row { display: flex; align-items: center; gap: 10px; margin: 0 0 2px; }
+.kw-logo-mark {
+    width: 31px; height: 31px; border-radius: 10px; background: var(--text);
+    display: flex; align-items: center; justify-content: center; color: white;
+    font-weight: 700; font-size: 14px;
+}
+.kw-logo-title { font-size: 15px; font-weight: 650; letter-spacing: -.01em; color: var(--text); }
+.kw-logo-subtitle { font-size: 11.5px; color: var(--text-muted); margin: 0 0 22px 41px; }
 .kw-section-label {
-    font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
-    color: var(--text-muted); margin: 16px 0 6px 0;
+    font-size: 11.5px; font-weight: 600; letter-spacing: .01em;
+    color: var(--text-muted); margin: 24px 0 9px;
 }
 
 .kw-doc-card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
-    padding: 8px 10px; margin-bottom: 6px;
+    min-width: 0; background: transparent; border: 0;
+    border-radius: var(--radius-sm); padding: 8px 4px; margin-bottom: 2px;
 }
-.kw-doc-name { font-size: 13px; font-weight: 500; color: var(--text); word-break: break-word; }
-.kw-doc-meta { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+.kw-doc-name {
+    font-size: 13px; font-weight: 540; line-height: 1.35; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kw-doc-meta { font-size: 11px; color: var(--text-muted); margin: 3px 0 0 22px; }
+.kw-empty-docs {
+    padding: 8px 2px; color: var(--text-muted); font-size: 12px;
+}
 
-.kw-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.kw-stat-cell { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; }
-.kw-stat-value { font-size: 16px; font-weight: 600; color: var(--text); }
-.kw-stat-label { font-size: 10.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
-
-.kw-empty-state { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 12vh 20px 4vh 20px; }
+.kw-empty-state {
+    display: flex; flex-direction: column; align-items: center; text-align: center;
+    padding: min(16vh, 135px) 20px 42px;
+}
 .kw-empty-icon {
-    width: 56px; height: 56px; border-radius: var(--radius-md); background: var(--accent-soft);
-    color: var(--accent); display: flex; align-items: center; justify-content: center;
-    font-size: 26px; margin-bottom: 16px;
+    width: 58px; height: 58px; border-radius: 18px;
+    background: var(--accent-soft); border: 0; color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 25px; margin-bottom: 22px;
 }
-.kw-empty-title { font-size: 22px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
-.kw-empty-subtitle { font-size: 14px; color: var(--text-muted); max-width: 380px; }
-
-.kw-citation-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; margin-bottom: 6px; }
-.kw-citation-doc { font-size: 13px; font-weight: 500; color: var(--text); }
-.kw-citation-meta { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+.kw-empty-title {
+    font-size: 28px; font-weight: 630; letter-spacing: -.025em;
+    color: var(--text); margin-bottom: 10px;
+}
+.kw-empty-subtitle {
+    font-size: 14.5px; line-height: 1.65; color: var(--text-muted); max-width: 470px;
+}
+.kw-citation-card {
+    display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; background: transparent;
+    border: 0; border-radius: 0; padding: 3px 1px;
+    margin: 1px 16px 1px 0; max-width: 100%;
+}
+.kw-citation-doc {
+    font-size: 11.5px; font-weight: 550; color: var(--accent);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 250px;
+}
+.kw-citation-meta { font-size: 10.5px; color: var(--text-muted); white-space: nowrap; }
 
 .stButton > button {
-    border-radius: var(--radius-sm) !important; border: 1px solid var(--border) !important;
-    background: var(--surface) !important; color: var(--text) !important; font-weight: 500 !important;
-    font-size: 13px !important; box-shadow: none !important;
+    border-radius: var(--radius-sm) !important; border: 1px solid transparent !important;
+    background: transparent !important; color: var(--text) !important;
+    font-weight: 560 !important; font-size: 13px !important; box-shadow: none !important;
+    transition: border-color .15s ease, background .15s ease, transform .15s ease;
 }
-.stButton > button:hover { border-color: var(--accent) !important; color: var(--accent) !important; }
-.stButton > button[kind="primary"] { background: var(--accent) !important; border-color: var(--accent) !important; color: white !important; }
+.stButton > button:hover {
+    border-color: transparent !important; color: var(--text) !important;
+    background: var(--surface-hover) !important;
+}
+.stButton > button[kind="primary"] {
+    background: var(--text) !important; border-color: var(--text) !important;
+    color: var(--surface) !important;
+}
+.stButton > button[kind="primary"]:hover {
+    background: var(--accent-hover) !important; border-color: var(--accent-hover) !important;
+    color: white !important;
+}
+div[data-testid="stFileUploader"] {
+    background: var(--surface-subtle); border: 0;
+    border-radius: var(--radius-md); padding: 2px 7px;
+}
+div[data-testid="stFileUploader"] section { padding: 8px; }
+div[data-testid="stFileUploader"] small { color: var(--text-muted); }
+div[data-testid="stChatMessage"] {
+    background: transparent; border: 0; padding: 1.35rem .2rem;
+}
+div[data-testid="stChatInput"] {
+    border-color: var(--border); background: var(--surface); box-shadow: var(--shadow);
+}
+div[data-testid="stExpander"] { border: 0; background: transparent; }
 </style>
 """
 
 
 def inject_css() -> None:
-    """Injects the stylesheet and applies the current theme attribute."""
+    """Injects the application stylesheet."""
     st.markdown(_CSS, unsafe_allow_html=True)
-    theme_name = "dark" if st.session_state.dark_mode else "light"
-    st.markdown(
-        f"""<script>
-        const doc = window.parent.document;
-        doc.documentElement.setAttribute('data-kw-theme', '{theme_name}');
-        const app = doc.querySelector('.stApp');
-        if (app) app.setAttribute('data-kw-theme', '{theme_name}');
-        </script>""",
-        unsafe_allow_html=True,
-    )
 
 
 # =========================================================
@@ -177,11 +206,11 @@ def init_session_state() -> None:
     """Populates every session_state default exactly once per browser session."""
     defaults = {
         "messages": [],                 # [{"role", "content", "sources"}]
-        "dark_mode": False,
         "uploader_version": 0,          # bumped to force-reset the file_uploader widget
         "doc_chunk_counts": {},         # filename -> chunk count (UI-side cache; see note below)
         "pending_delete": None,         # filename awaiting delete confirmation
         "confirm_clear": False,
+        "pending_duplicate_notice": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -227,32 +256,6 @@ def friendly_error(exc: Exception) -> str:
     return "The backend is unavailable right now. Please try again."
 
 
-# --- read-only accessors: these only READ existing backend state, never
-# mutate it, so every stat shown anywhere in the UI has one source. ---
-
-def get_document_count(workspace: KnowledgeWorkspace) -> int:
-    """Real, live document count - never hardcoded."""
-    return len(workspace.registered_files)
-
-
-def get_chunk_count(workspace: KnowledgeWorkspace) -> int:
-    """
-    Real, live chunk count read directly from the Chroma collection the
-    backend already built. The backend has no public method for this, so
-    this reads the same `_collection` handle already touched by
-    delete_by_source() inside the backend itself - a read, not a mutation.
-    Falls back to the UI-side cache if the vectorstore isn't initialized
-    yet (e.g. immediately after a rebuild before any query has run).
-    """
-    vectorstore = workspace.vector_manager.vectorstore
-    if vectorstore is not None:
-        try:
-            return vectorstore._collection.count()
-        except Exception:
-            pass
-    return sum(st.session_state.doc_chunk_counts.values())
-
-
 # =========================================================
 # UPLOAD LOGIC + OTHER ACTION HANDLERS (own backend calls + state transitions)
 # =========================================================
@@ -286,25 +289,42 @@ def handle_upload(staged_files: list) -> None:
     new_files = [f for f in staged_files if f.name not in already_uploaded]
 
     if duplicates:
-        st.toast(f"Skipped {len(duplicates)} already-uploaded file(s): {', '.join(duplicates)}", icon="⚠️")
+        if len(duplicates) == 1:
+            st.session_state.pending_duplicate_notice = (
+                f"{duplicates[0]} already exists in this workspace."
+            )
+        else:
+            st.session_state.pending_duplicate_notice = (
+                f"{len(duplicates)} selected documents already exist in this workspace."
+            )
 
     if not new_files:
-        return
+        st.session_state.uploader_version += 1
+        st.rerun()
 
-    status = st.status("Uploading document…", expanded=True)
+    status = st.status("Adding your documents…", expanded=True)
+    progress = st.progress(0, text="Preparing files…")
     for index, uploaded_file in enumerate(new_files, start=1):
-        status.update(label=f"Uploading document… ({uploaded_file.name}, {index}/{len(new_files)})")
+        status.update(label=f"Processing {uploaded_file.name}")
+        progress.progress(
+            (index - 1) / len(new_files),
+            text=f"Document {index} of {len(new_files)} · Reading file",
+        )
         try:
             path = _save_to_disk(uploaded_file)
-            status.update(label=f"Creating embeddings… ({uploaded_file.name})")
+            progress.progress(
+                (index - 0.5) / len(new_files),
+                text=f"Document {index} of {len(new_files)} · Preparing for search",
+            )
             result = workspace.upload_documents([path])
             chunks_created = result["chunks_created"]
             st.session_state.doc_chunk_counts[uploaded_file.name] = chunks_created
-            st.toast(f"{uploaded_file.name} uploaded — {chunks_created} chunks created.", icon="✅")
+            st.toast(f"{uploaded_file.name} is ready.", icon="✅")
         except Exception as exc:
             st.toast(f"{uploaded_file.name}: {friendly_error(exc)}", icon="🚫")
 
-    status.update(label="Upload complete.", state="complete")
+    progress.progress(1.0, text="Documents ready")
+    status.update(label="Documents added", state="complete", expanded=False)
 
     # Force the file_uploader widget to visually reset by changing its
     # key on the next render - this is what stops a processed file from
@@ -356,21 +376,6 @@ def handle_new_chat() -> None:
     st.rerun()
 
 
-def handle_rebuild() -> None:
-    """Re-indexes every currently registered file from scratch. Per-file
-    chunk counts can't be reconstructed from the single aggregate number
-    the backend returns, so the UI-side cache is cleared and will read as
-    'unknown' per document until each is re-uploaded individually."""
-    workspace = get_workspace()
-    try:
-        workspace.rebuild_embeddings()
-        st.session_state.doc_chunk_counts = {}
-        st.toast("Workspace rebuilt.", icon="✅")
-    except Exception as exc:
-        st.toast(friendly_error(exc), icon="🚫")
-    st.rerun()
-
-
 # =========================================================
 # CHAT LOGIC
 # =========================================================
@@ -388,6 +393,18 @@ def handle_question(question: str) -> None:
 
     with st.chat_message("user"):
         st.markdown(question)
+
+    if not workspace.registered_files:
+        message = (
+            "I don't have any documents yet. Upload one or more PDF, DOCX, "
+            "or TXT files and I'll answer questions based on their contents."
+        )
+        with st.chat_message("assistant"):
+            st.markdown(message)
+        st.session_state.messages.append(
+            {"role": "assistant", "content": message, "sources": []}
+        )
+        return
 
     with st.chat_message("assistant"):
         status = st.empty()
@@ -417,21 +434,82 @@ def handle_question(question: str) -> None:
 # =========================================================
 
 def render_sources(sources: list) -> None:
-    """Renders the professional citation cards (fixes the raw-dict display bug)."""
+    """Groups citation metadata by document and renders each document once."""
     if not sources:
         return
-    with st.expander(f"Sources ({len(sources)})"):
-        for i, source in enumerate(sources, start=1):
-            page = source.get("page")
-            page_label = f"Page {page}" if page not in (None, "unknown") else "Page —"
-            chunk_label = f"Chunk {source.get('chunk_number', '—')}"
+
+    grouped_sources = {}
+    for source in sources:
+        document_name = str(source.get("document", "Unknown document"))
+        citation = (source.get("page"), source.get("chunk_number"))
+        document_citations = grouped_sources.setdefault(document_name, [])
+        if citation not in document_citations:
+            document_citations.append(citation)
+
+    with st.expander(f"Sources · {len(grouped_sources)}"):
+        for document_name, citations in grouped_sources.items():
+            citations_by_page = {}
+            for page, chunk in citations:
+                page_key = page if isinstance(page, int) else None
+                chunks = citations_by_page.setdefault(page_key, [])
+                if chunk not in (None, "unknown") and chunk not in chunks:
+                    chunks.append(chunk)
+
+            metadata_lines = []
+            for page, chunks in citations_by_page.items():
+                page_label = f"Page {page + 1}" if page is not None else ""
+                if len(chunks) == 1:
+                    chunk_label = f"Chunk {chunks[0]}"
+                elif chunks:
+                    chunk_label = f"Chunks {', '.join(str(chunk) for chunk in chunks)}"
+                else:
+                    chunk_label = ""
+
+                label = " • ".join(
+                    part for part in (page_label, chunk_label) if part
+                )
+                if label:
+                    metadata_lines.append(escape(label))
+
+            document = escape(document_name)
+            metadata_html = "".join(
+                f'<div class="kw-citation-meta">{line}</div>'
+                for line in metadata_lines
+            )
             st.markdown(
                 f"""<div class="kw-citation-card">
-                    <div class="kw-citation-doc">📄 {source.get('document', 'Unknown document')}</div>
-                    <div class="kw-citation-meta">📖 {page_label} · 🧩 {chunk_label}</div>
+                    <div class="kw-citation-doc">📄 {document}</div>
+                    {metadata_html}
                 </div>""",
                 unsafe_allow_html=True,
             )
+
+
+def _format_file_size(size_bytes: int) -> str:
+    """Returns a short, user-friendly file size."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def _shorten_filename(filename: str, max_length: int = 34) -> str:
+    """Shortens long names while preserving recognizable text and the extension."""
+    if len(filename) <= max_length:
+        return filename
+
+    path = Path(filename)
+    extension = path.suffix
+    stem = path.stem
+    available = max_length - len(extension) - 1
+
+    if available < 8:
+        return f"{stem[:max(1, available)]}…{extension}"
+
+    beginning = max(available * 2 // 3, 1)
+    ending = max(available - beginning, 1)
+    return f"{stem[:beginning]}…{stem[-ending:]}{extension}"
 
 
 def render_documents(workspace: KnowledgeWorkspace) -> None:
@@ -441,22 +519,32 @@ def render_documents(workspace: KnowledgeWorkspace) -> None:
     sync with what the backend actually has indexed.
     """
     if not workspace.registered_files:
-        st.markdown("<div class='kw-doc-meta'>No documents uploaded yet.</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='kw-empty-docs'>Your documents will appear here.</div>",
+            unsafe_allow_html=True,
+        )
         return
 
-    for filename in list(workspace.registered_files.keys()):
-        chunks = st.session_state.doc_chunk_counts.get(filename, "—")
-        col_info, col_delete = st.columns([4, 1])
+    for filename, path in list(workspace.registered_files.items()):
+        safe_filename = escape(_shorten_filename(filename))
+        full_filename = escape(filename, quote=True)
+        try:
+            size_bytes = os.path.getsize(path)
+            size_label = _format_file_size(size_bytes)
+        except OSError:
+            size_label = "Ready"
+
+        col_info, col_delete = st.columns([5, 1], vertical_alignment="center")
         with col_info:
             st.markdown(
                 f"""<div class="kw-doc-card">
-                    <div class="kw-doc-name">📄 {filename}</div>
-                    <div class="kw-doc-meta">{chunks} chunks</div>
+                    <div class="kw-doc-name" title="{full_filename}">▤&nbsp; {safe_filename}</div>
+                    <div class="kw-doc-meta">{size_label}</div>
                 </div>""",
                 unsafe_allow_html=True,
             )
         with col_delete:
-            if st.button("🗑", key=f"delete_{filename}", help=f"Delete {filename}"):
+            if st.button("×", key=f"delete_{filename}", help=f"Remove {filename}"):
                 st.session_state.pending_delete = filename
                 st.rerun()
 
@@ -465,10 +553,11 @@ def render_documents(workspace: KnowledgeWorkspace) -> None:
 
 
 def _render_delete_confirmation(filename: str) -> None:
-    st.warning(f"Delete **{filename}**? This can't be undone.")
+    st.warning("Remove this document?")
+    st.caption(filename)
     col_yes, col_no = st.columns(2)
     with col_yes:
-        if st.button("Delete", key="confirm_delete", use_container_width=True, type="primary"):
+        if st.button("Remove", key="confirm_delete", use_container_width=True, type="primary"):
             handle_delete(filename)
     with col_no:
         if st.button("Cancel", key="cancel_delete", use_container_width=True):
@@ -476,94 +565,64 @@ def _render_delete_confirmation(filename: str) -> None:
             st.rerun()
 
 
-def render_workspace_stats(workspace: KnowledgeWorkspace) -> None:
-    """All four values are read live from the backend/config at render
-    time - none are hardcoded."""
-    st.markdown(
-        f"""<div class="kw-stat-grid">
-            <div class="kw-stat-cell">
-                <div class="kw-stat-value">{get_document_count(workspace)}</div>
-                <div class="kw-stat-label">Documents</div>
-            </div>
-            <div class="kw-stat-cell">
-                <div class="kw-stat-value">{get_chunk_count(workspace)}</div>
-                <div class="kw-stat-label">Chunks</div>
-            </div>
-            <div class="kw-stat-cell">
-                <div class="kw-stat-value" style="font-size:12px;">{workspace.config.embedding_model_name.split('/')[-1]}</div>
-                <div class="kw-stat-label">Embedding model</div>
-            </div>
-            <div class="kw-stat-cell">
-                <div class="kw-stat-value" style="font-size:12px;">{workspace.config.gemini_model}</div>
-                <div class="kw-stat-label">LLM</div>
-            </div>
-        </div>""",
-        unsafe_allow_html=True,
-    )
-
-
 def render_sidebar(workspace: KnowledgeWorkspace) -> None:
-    """Assembles the sidebar top to bottom. Each section below is a
-    single function call - adding a future section (e.g. model selection)
-    means adding one more call here and one more render_*() function."""
+    """Renders the document-first navigation and secondary settings."""
+    if st.session_state.pending_duplicate_notice:
+        st.toast(st.session_state.pending_duplicate_notice, icon="ℹ️")
+        st.session_state.pending_duplicate_notice = None
+
     st.markdown(
         """<div class="kw-logo-row">
             <div class="kw-logo-mark">K</div>
             <div class="kw-logo-title">Knowledge Workspace</div>
         </div>
-        <div class="kw-logo-subtitle">AI-powered RAG assistant</div>""",
+        <div class="kw-logo-subtitle">Chat with your documents</div>""",
         unsafe_allow_html=True,
     )
 
-    if st.button("➕ New Chat", use_container_width=True, type="primary"):
+    if st.button("＋ New chat", use_container_width=True, type="primary"):
         handle_new_chat()
 
-    st.markdown("<div class='kw-section-label'>Upload documents</div>", unsafe_allow_html=True)
-    uploader_key = f"uploader_{st.session_state.uploader_version}"
-    staged_files = st.file_uploader(
-        "Upload PDF, DOCX or TXT",
-        type=["pdf", "docx", "txt"],
-        accept_multiple_files=True,
-        label_visibility="collapsed",
-        key=uploader_key,
-    )
-    if staged_files:
-        st.caption(f"{len(staged_files)} file(s) ready — click Upload to process.")
-    if st.button("⬆ Upload", use_container_width=True, disabled=not staged_files):
-        handle_upload(staged_files)
-
-    st.markdown("<div class='kw-section-label'>Uploaded documents</div>", unsafe_allow_html=True)
+    st.markdown("<div class='kw-section-label'>Documents</div>", unsafe_allow_html=True)
     render_documents(workspace)
 
-    st.markdown("<div class='kw-section-label'>Workspace statistics</div>", unsafe_allow_html=True)
-    render_workspace_stats(workspace)
+    st.markdown("<div class='kw-section-label'>Add documents</div>", unsafe_allow_html=True)
+    uploader_key = f"uploader_{st.session_state.uploader_version}"
+    staged_files = st.file_uploader(
+        "Choose files",
+        type=["pdf", "docx", "txt"],
+        accept_multiple_files=True,
+        key=uploader_key,
+        help="PDF, DOCX, or TXT",
+    )
+    if staged_files:
+        st.caption("Uploading automatically…")
+        handle_upload(staged_files)
 
-    st.markdown("<div class='kw-section-label'>Database</div>", unsafe_allow_html=True)
-    col_rebuild, col_clear = st.columns(2)
-    with col_rebuild:
-        if st.button("Rebuild", use_container_width=True, help="Re-index all uploaded documents"):
-            handle_rebuild()
-    with col_clear:
-        if st.button("Clear all", use_container_width=True, help="Delete every document"):
-            st.session_state.confirm_clear = True
-            st.rerun()
+    st.markdown("<div class='kw-section-label'>Workspace</div>", unsafe_allow_html=True)
+    if st.button(
+        "🗑 Delete all documents",
+        use_container_width=True,
+        disabled=not workspace.registered_files,
+    ):
+        st.session_state.confirm_clear = True
+        st.rerun()
 
     if st.session_state.confirm_clear:
-        st.warning("Clear the entire workspace? This removes every document.")
+        st.error("Remove every document from this workspace?")
         col_yes, col_no = st.columns(2)
         with col_yes:
-            if st.button("Confirm clear", key="confirm_clear_btn", use_container_width=True, type="primary"):
+            if st.button(
+                "Delete all",
+                key="confirm_clear_btn",
+                use_container_width=True,
+                type="primary",
+            ):
                 handle_clear_workspace()
         with col_no:
             if st.button("Cancel", key="cancel_clear_btn", use_container_width=True):
                 st.session_state.confirm_clear = False
                 st.rerun()
-
-    st.markdown("<hr style='border-color: var(--border); margin: 16px 0;'/>", unsafe_allow_html=True)
-    theme_label = "☀️ Light mode" if st.session_state.dark_mode else "🌙 Dark mode"
-    if st.button(theme_label, use_container_width=True):
-        st.session_state.dark_mode = not st.session_state.dark_mode
-        st.rerun()
 
 
 # =========================================================
@@ -574,12 +633,21 @@ def render_chat(workspace: KnowledgeWorkspace) -> None:
     """Renders the empty state or the transcript, then the fixed input box."""
     has_documents = bool(workspace.registered_files)
 
-    if not has_documents and not st.session_state.messages:
+    if not st.session_state.messages:
+        if has_documents:
+            title = "Your documents are ready"
+            subtitle = "Ask a question and I’ll find the most relevant information across your files."
+            icon = "✦"
+        else:
+            title = "Start with your documents"
+            subtitle = "Add a PDF, DOCX, or TXT file from the sidebar. It will be prepared automatically."
+            icon = "▤"
+
         st.markdown(
-            """<div class="kw-empty-state">
-                <div class="kw-empty-icon">📚</div>
-                <div class="kw-empty-title">Knowledge Workspace</div>
-                <div class="kw-empty-subtitle">Upload documents or start asking questions.</div>
+            f"""<div class="kw-empty-state">
+                <div class="kw-empty-icon">{icon}</div>
+                <div class="kw-empty-title">{title}</div>
+                <div class="kw-empty-subtitle">{subtitle}</div>
             </div>""",
             unsafe_allow_html=True,
         )
@@ -590,8 +658,8 @@ def render_chat(workspace: KnowledgeWorkspace) -> None:
                 if message["role"] == "assistant":
                     render_sources(message.get("sources", []))
 
-    placeholder = "Ask anything about your documents…" if has_documents else "Upload a document to get started…"
-    question = st.chat_input(placeholder, disabled=not has_documents)
+    placeholder = "Ask anything about your documents…" if has_documents else "Ask a question…"
+    question = st.chat_input(placeholder)
     if question:
         handle_question(question)
 
@@ -612,10 +680,6 @@ def main() -> None:
 
     with st.sidebar:
         render_sidebar(workspace)
-
-    st.title("Knowledge Workspace")
-    st.caption("Ask questions about your uploaded documents.")
-    st.divider()
 
     render_chat(workspace)
 
