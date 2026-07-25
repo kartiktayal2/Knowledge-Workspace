@@ -88,7 +88,11 @@ _CSS = """
     background: var(--bg); color: var(--text);
     font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
-#MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; height: 0; }
+#MainMenu, footer { visibility: hidden; height: 0; }
+
+header[data-testid="stHeader"] {
+    background: transparent;
+}
 .block-container { max-width: 860px; padding-top: 2.25rem; padding-bottom: 7rem; }
 
 section[data-testid="stSidebar"] {
