@@ -315,17 +315,42 @@ def handle_upload(staged_files: list) -> None:
             text=f"Document {index} of {len(new_files)} · Reading file",
         )
         try:
+            status.update(label=f"📄 Reading {uploaded_file.name}...")
+            progress.progress(20)
+
             path = _save_to_disk(uploaded_file)
-            progress.progress(
-                (index - 0.5) / len(new_files),
-                text=f"Document {index} of {len(new_files)} · Preparing for search",
-            )
+
+            status.update(label="✂️ Preparing document...")
+            progress.progress(40)
+
+            status.update(label="🧠 Creating embeddings...")
+            progress.progress(70)
+
             result = workspace.upload_documents([path])
+
+            status.update(label="💾 Saving document...")
+            progress.progress(90)
+
             chunks_created = result["chunks_created"]
             st.session_state.doc_chunk_counts[uploaded_file.name] = chunks_created
-            st.toast(f"{uploaded_file.name} is ready.", icon="✅")
+
+            progress.progress(100)
+            status.update(label="✅ Upload completed", state="complete")
+
+            st.toast(
+                f"✅ {uploaded_file.name} uploaded successfully ({chunks_created} chunks)",
+                icon="✅",
+            )
+
         except Exception as exc:
-            st.toast(f"{uploaded_file.name}: {friendly_error(exc)}", icon="🚫")
+            status.update(label="❌ Upload failed", state="error")
+
+            st.exception(exc)
+
+            st.toast(
+                f"❌ Upload failed: {uploaded_file.name}",
+                icon="❌",
+            )
 
     progress.progress(1.0, text="Documents ready")
     status.update(label="Documents added", state="complete", expanded=False)
