@@ -22,6 +22,7 @@ Section markers make each boundary explicit.
 import os
 import sys
 import tempfile
+import logging
 from html import escape
 from pathlib import Path
 
@@ -35,6 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
 from backend.app import (  # noqa: E402
+    Config,
     KnowledgeWorkspace,
     KnowledgeWorkspaceError,
     MissingAPIKeyError,
@@ -45,6 +47,12 @@ from backend.app import (  # noqa: E402
     EmbeddingGenerationError,
     LLMGenerationError,
     VectorStoreNotReadyError,
+)
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
 
@@ -214,24 +222,23 @@ def init_session_state() -> None:
         "doc_chunk_counts": {},         # filename -> chunk count (UI-side cache; see note below)
         "pending_delete": None,         # filename awaiting delete confirmation
         "confirm_clear": False,
-        "pending_duplicate_notice": None,
+        "upload_notices": [],
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
 
-@st.cache_resource(show_spinner=False)
 def get_workspace() -> KnowledgeWorkspace:
-    """
-    Builds exactly ONE KnowledgeWorkspace for the server process's
-    lifetime. cache_resource (not session_state) is deliberate: it avoids
-    reloading the embedding model and reopening ChromaDB on every rerun,
-    which was an implicit performance bug risk in the original design
-    (workspace was session_state-scoped, so a second browser tab would
-    have quietly reloaded everything from scratch).
-    """
-    return KnowledgeWorkspace()
+    """Return isolated mutable state for the current browser session."""
+    if "workspace" not in st.session_state:
+        workspace_root = tempfile.mkdtemp(prefix="knowledge_workspace_")
+        config = Config(
+            persist_directory=os.path.join(workspace_root, "chroma_db")
+        )
+        st.session_state.workspace_root = workspace_root
+        st.session_state.workspace = KnowledgeWorkspace(config)
+    return st.session_state.workspace
 
 
 # =========================================================
@@ -264,107 +271,67 @@ def friendly_error(exc: Exception) -> str:
 # UPLOAD LOGIC + OTHER ACTION HANDLERS (own backend calls + state transitions)
 # =========================================================
 
-_UPLOAD_STAGING_DIR = os.path.join(tempfile.gettempdir(), "knowledge_workspace_uploads")
-os.makedirs(_UPLOAD_STAGING_DIR, exist_ok=True)
-
-
 def _save_to_disk(uploaded_file) -> str:
     """Writes one Streamlit UploadedFile to disk under its REAL original
     name (no temp/random filenames) so citations and dedup-by-basename
     both work correctly against the name the user actually recognizes."""
-    destination = os.path.join(_UPLOAD_STAGING_DIR, uploaded_file.name)
+    upload_directory = os.path.join(st.session_state.workspace_root, "uploads")
+    os.makedirs(upload_directory, exist_ok=True)
+    destination = os.path.join(upload_directory, Path(uploaded_file.name).name)
     with open(destination, "wb") as f:
         f.write(uploaded_file.getbuffer())
     return destination
 
 
 def handle_upload(staged_files: list) -> None:
-    """
-    Called ONLY when the user explicitly clicks the Upload button - never
-    as a side effect of a rerun. Detects duplicates against the backend's
-    own registered_files before calling the backend at all, uploads each
-    remaining file individually (so a per-file chunk count can be shown),
-    and resets the uploader widget afterward.
-    """
+    """Stage files and let the backend own validation and deduplication."""
     workspace = get_workspace()
-    already_uploaded = set(workspace.registered_files.keys())
-
-    duplicates = [f.name for f in staged_files if f.name in already_uploaded]
-    new_files = [f for f in staged_files if f.name not in already_uploaded]
-
-    if duplicates:
-        if len(duplicates) == 1:
-            st.session_state.pending_duplicate_notice = (
-                f"{duplicates[0]} already exists in this workspace."
-            )
-        else:
-            st.session_state.pending_duplicate_notice = (
-                f"{len(duplicates)} selected documents already exist in this workspace."
-            )
-
-    if not new_files:
-        st.session_state.uploader_version += 1
-        st.rerun()
-
     status = st.status("Adding your documents…", expanded=True)
     progress = st.progress(0, text="Preparing files…")
-    for index, uploaded_file in enumerate(new_files, start=1):
+    notices = []
+    for index, uploaded_file in enumerate(staged_files, start=1):
         status.update(label=f"Processing {uploaded_file.name}")
         progress.progress(
-            (index - 1) / len(new_files),
-            text=f"Document {index} of {len(new_files)} · Reading file",
+            (index - 1) / len(staged_files),
+            text=f"Document {index} of {len(staged_files)} · Reading file",
         )
         try:
-            status.update(label=f"📄 Reading {uploaded_file.name}...")
+            status.update(label=f"Reading {uploaded_file.name}…")
             progress.progress(20)
 
             path = _save_to_disk(uploaded_file)
 
-            status.update(label="✂️ Preparing document...")
+            status.update(label="Preparing document…")
             progress.progress(40)
 
-            status.update(label="🧠 Creating embeddings...")
+            status.update(label="Creating embeddings…")
             progress.progress(70)
 
             result = workspace.upload_documents([path])
 
-            # Duplicate detected by backend
             if result.get("duplicate"):
-                status.update(label="⚠️ Duplicate document", state="complete")
-                st.toast(result["message"], icon="⚠️")
+                notices.append(("warning", f"{uploaded_file.name} already exists."))
                 continue
 
-            status.update(label="💾 Saving document...")
+            status.update(label="Saving document…")
             progress.progress(90)
 
             chunks_created = result["chunks_created"]
             st.session_state.doc_chunk_counts[uploaded_file.name] = chunks_created
 
             progress.progress(100)
-            status.update(label="✅ Upload completed", state="complete")
-
-            st.toast(
-                result["message"] + f" ({chunks_created} chunks)",
-                icon="✅",
+            notices.append(
+                ("success", f"{uploaded_file.name} added ({chunks_created} chunks).")
             )
 
         except Exception as exc:
-            status.update(label="❌ Upload failed", state="error")
-
-            st.exception(exc)
-
-            st.toast(
-                f"❌ {str(exc)}",
-                icon="❌",
-            )
+            logger.exception("Upload failed for %s", uploaded_file.name)
+            notices.append(("error", f"{uploaded_file.name}: {friendly_error(exc)}"))
 
     progress.progress(1.0, text="Documents ready")
     status.update(label="Documents added", state="complete", expanded=False)
-
-    # Force the file_uploader widget to visually reset by changing its
-    # key on the next render - this is what stops a processed file from
-    # lingering in the widget and being re-uploaded on some later rerun.
     st.session_state.uploader_version += 1
+    st.session_state.upload_notices = notices
     st.rerun()
 
 
@@ -372,7 +339,10 @@ def handle_delete(filename: str) -> None:
     """Deletes one document from the backend and clears its UI-side chunk cache entry."""
     workspace = get_workspace()
     try:
+        staged_path = workspace.registered_files.get(filename)
         workspace.delete_document(filename)
+        if staged_path:
+            Path(staged_path).unlink(missing_ok=True)
         st.session_state.doc_chunk_counts.pop(filename, None)
         st.toast(f"{filename} deleted.", icon="✅")
     except Exception as exc:
@@ -390,7 +360,10 @@ def handle_clear_workspace() -> None:
     an automatic re-upload after clearing.
     """
     workspace = get_workspace()
+    staged_paths = list(workspace.registered_files.values())
     workspace.clear_all()
+    for staged_path in staged_paths:
+        Path(staged_path).unlink(missing_ok=True)
     st.session_state.messages = []
     st.session_state.doc_chunk_counts = {}
     st.session_state.uploader_version += 1
@@ -602,9 +575,16 @@ def _render_delete_confirmation(filename: str) -> None:
 
 def render_sidebar(workspace: KnowledgeWorkspace) -> None:
     """Renders the document-first navigation and secondary settings."""
-    if st.session_state.pending_duplicate_notice:
-        st.toast(st.session_state.pending_duplicate_notice, icon="ℹ️")
-        st.session_state.pending_duplicate_notice = None
+    if st.session_state.upload_notices:
+        notices = st.session_state.upload_notices
+        st.session_state.upload_notices = []
+        for level, message in notices:
+            if level == "success":
+                st.success(message)
+            elif level == "warning":
+                st.warning(message)
+            else:
+                st.error(message)
 
     st.markdown(
         """<div class="kw-logo-row">

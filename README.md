@@ -74,7 +74,9 @@ KnowledgeWorkspace/
 - All visual styling
 
 The frontend communicates with the backend through the existing
-`KnowledgeWorkspace` public interface.
+`KnowledgeWorkspace` public interface. Each browser session owns an isolated
+workspace, vector collection, upload directory, and conversation memory. The
+read-only embedding model is shared once per Python process.
 
 ## How the RAG pipeline works
 
@@ -190,8 +192,10 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-The first embedding operation may download the sentence-transformer model and
-can take longer than later uploads.
+On a fresh machine or Community Cloud container, the application downloads the
+sentence-transformer snapshot once. Cached snapshots are resolved locally
+without a network metadata request, and the initialized model is reused for
+all later uploads.
 
 ## Configuration
 
@@ -289,15 +293,10 @@ This directory can become large when many documents or large PDFs are indexed.
 
 ### Uploaded source files
 
-Streamlit uploads are staged in the operating system's temporary directory
-under:
-
-```text
-knowledge_workspace_uploads
-```
-
-The backend keeps those paths in memory so documents can be rebuilt during the
-current process.
+Streamlit uploads are staged in a session-specific operating-system temporary
+directory. This prevents filenames, documents, Chroma data, and memory from
+being shared between browser sessions. Staged source files are removed when
+their document or workspace is deleted.
 
 ### API usage
 
@@ -378,8 +377,8 @@ streamlit run frontend/app.py --server.port 8502
 - Image OCR is not implemented.
 - The in-memory document registry is not automatically reconstructed from an
   existing Chroma directory after every process restart.
-- The current cached workspace is intended for a controlled environment rather
-  than strong multi-user isolation.
+- Community Cloud runtime files are ephemeral and may disappear when the app
+  container restarts.
 - Retrieval uses a fixed number of nearest chunks without a relevance-score
   threshold.
 - Source citations identify retrieved passages; they do not prove that every
@@ -422,4 +421,3 @@ logic:
 - Secrets belong in environment variables, never in source code.
 - New dependencies should be added to `requirements.txt` with tested versions.
 - Behavior changes should be accompanied by focused tests.
-

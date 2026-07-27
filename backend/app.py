@@ -31,8 +31,9 @@ split into multiple modules later without difficulty.
 # =========================================================
 
 import os
-import shutil
-import uuid
+import logging
+import threading
+from functools import lru_cache
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 
@@ -40,10 +41,10 @@ from typing import List, Dict, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
-# Gemini SDK (direct SDK call, same pattern your old code used
-# for Gemini's client - i.e. NOT wrapped through langchain, for simplicity
-# and full control over prompts/errors)
-import google.generativeai as genai
+# Current Gemini SDK. It is used directly rather than through LangChain so the
+# backend retains control over prompts and provider error translation.
+from google import genai
+from google.genai import types as genai_types
 
 # Document loaders - one per supported file type
 from langchain_community.document_loaders import (
@@ -57,9 +58,46 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # Embeddings (same HuggingFace model family you already used)
 from langchain_huggingface import HuggingFaceEmbeddings
+from huggingface_hub import snapshot_download
 
 # Vector database (same ChromaDB wrapper you already used)
 from langchain_chroma import Chroma
+
+
+logger = logging.getLogger(__name__)
+_embedding_load_lock = threading.Lock()
+
+
+@lru_cache(maxsize=None)
+def get_embedding_model(model_name: str) -> HuggingFaceEmbeddings:
+    """Load one shared model, resolving the Hub only once per process."""
+    with _embedding_load_lock:
+        logger.info("Resolving embedding model %s", model_name)
+        try:
+            try:
+                model_path = snapshot_download(
+                    repo_id=model_name,
+                    local_files_only=True,
+                )
+                logger.info("Using cached embedding model at %s", model_path)
+            except Exception:
+                logger.info("Embedding model is not cached; downloading it once")
+                model_path = snapshot_download(
+                    repo_id=model_name,
+                    etag_timeout=15,
+                )
+
+            model = HuggingFaceEmbeddings(
+                model_name=model_path,
+                model_kwargs={"local_files_only": True},
+            )
+            logger.info("Embedding model is ready")
+            return model
+        except Exception as exc:
+            logger.exception("Embedding model initialization failed")
+            raise EmbeddingGenerationError(
+                f"Failed to initialize embedding model '{model_name}': {exc}"
+            ) from exc
 
 
 # =========================================================
@@ -327,14 +365,9 @@ class VectorStoreManager:
         actually needed, not at import time.
         """
         if self.embedding is None:
-            try:
-                self.embedding = HuggingFaceEmbeddings(
-                    model_name=self.config.embedding_model_name
-                )
-            except Exception as exc:
-                raise EmbeddingGenerationError(
-                    f"Failed to load embedding model: {exc}"
-                ) from exc
+            self.embedding = get_embedding_model(
+                self.config.embedding_model_name
+            )
 
     def build_from_chunks(self, chunks: List) -> None:
         """
@@ -396,14 +429,22 @@ class VectorStoreManager:
 
     def clear(self) -> None:
         """
-        Wipes the entire vector database from disk and memory.
+        Deletes the active Chroma collection and releases the wrapper.
 
-        WHY: the spec explicitly asks for a "Clearing the vector database"
-        operation, distinct from deleting a single document.
+        Chroma's SQLite client can retain an open file handle on Windows, so
+        deleting the collection is both safer and more portable than removing
+        its persistence directory while the process is running.
         """
-        self.vectorstore = None
-        if os.path.exists(self.config.persist_directory):
-            shutil.rmtree(self.config.persist_directory, ignore_errors=True)
+        if self.vectorstore is not None:
+            try:
+                self.vectorstore.delete_collection()
+            except Exception as exc:
+                logger.exception("Failed to clear the Chroma collection")
+                raise EmbeddingGenerationError(
+                    f"Failed to clear the vector database: {exc}"
+                ) from exc
+            finally:
+                self.vectorstore = None
 
     def get_retriever(self):
         """
@@ -493,12 +534,6 @@ class CitationFormatter:
         return citations
 
 
-# =========================================================
-# SECTION 8: Gemini CLIENT
-# =========================================================
-import google.generativeai as genai
-
-
 class GeminiClient:
     """
     Thin wrapper around the Gemini SDK so the rest of the codebase
@@ -508,20 +543,20 @@ class GeminiClient:
     def __init__(self, config: Config):
         self.config = config
 
-        # Configure Gemini API
-        genai.configure(api_key=config.google_api_key)
-
-        # Load Gemini model
-        self.model = genai.GenerativeModel(
-            model_name=config.gemini_model
-        )
+        self.client = genai.Client(api_key=config.google_api_key)
 
     def generate_answer(self, prompt: str) -> str:
         """
         Sends the prompt to Gemini and returns the generated text.
         """
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.config.gemini_model,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    max_output_tokens=self.config.max_answer_tokens,
+                ),
+            )
 
             if not response.text:
                 raise LLMGenerationError("Gemini returned an empty response.")
@@ -548,14 +583,22 @@ class KnowledgeWorkspace:
     directly.
     """
 
-    def __init__(self, config: Optional[Config] = None):
+    def __init__(
+        self,
+        config: Optional[Config] = None,
+        *,
+        processor=None,
+        vector_manager=None,
+        memory=None,
+        llm_client=None,
+    ):
         self.config = config or Config()
         self.config.validate()
 
-        self.processor = DocumentProcessor(self.config)
-        self.vector_manager = VectorStoreManager(self.config)
-        self.memory = ConversationMemory(self.config)
-        self.llm = GeminiClient(self.config)
+        self.processor = processor or DocumentProcessor(self.config)
+        self.vector_manager = vector_manager or VectorStoreManager(self.config)
+        self.memory = memory or ConversationMemory(self.config)
+        self.llm = llm_client or GeminiClient(self.config)
 
         # Tracks which real file paths are currently "in" the workspace,
         # keyed by source filename, so we can support delete/rebuild
@@ -574,10 +617,6 @@ class KnowledgeWorkspace:
         if not file_paths:
             raise EmptyUploadError("No files were provided to upload.")
 
-        print("\n" + "=" * 60)
-        print("[UPLOAD] Upload Started")
-        print("=" * 60)
-
         new_paths = []
 
         for path in file_paths:
@@ -587,7 +626,7 @@ class KnowledgeWorkspace:
                 new_paths.append(path)
 
         if not new_paths:
-            print("[UPLOAD] Duplicate file detected")
+            logger.info("Duplicate upload skipped: %s", file_paths)
             return {
                 "success": False,
                 "duplicate": True,
@@ -597,24 +636,22 @@ class KnowledgeWorkspace:
             }
 
         try:
-            print("[1/4] Loading documents...")
+            logger.info("Loading %d document(s)", len(new_paths))
             documents = self.processor.load_many(new_paths)
-            print(f"✓ Loaded {len(documents)} document(s)")
-
-            print("[2/4] Splitting documents...")
             chunks = self.processor.split_documents(documents)
-            print(f"✓ Created {len(chunks)} chunks")
-
-            print("[3/4] Creating embeddings...")
+            if not chunks:
+                raise CorruptedDocumentError(
+                    "The selected documents contained no indexable text."
+                )
             self.vector_manager.add_chunks(chunks)
-            print("✓ Embeddings stored")
-
-            print("[4/4] Registering uploaded files...")
             for path in new_paths:
                 self.registered_files[os.path.basename(path)] = path
 
-            print("✓ Upload completed successfully")
-            print("=" * 60)
+            logger.info(
+                "Upload complete: %d document(s), %d chunks",
+                len(new_paths),
+                len(chunks),
+            )
 
             return {
                 "success": True,
@@ -624,12 +661,8 @@ class KnowledgeWorkspace:
                 "chunks_created": len(chunks),
             }
 
-        except Exception as exc:
-            print("\n[UPLOAD FAILED]")
-            print(type(exc).__name__)
-            print(exc)
-            print("=" * 60)
-
+        except Exception:
+            logger.exception("Document upload failed")
             raise
 
     def delete_document(self, source_name: str) -> None:
@@ -649,6 +682,7 @@ class KnowledgeWorkspace:
         """
         self.vector_manager.clear()
         self.registered_files.clear()
+        self.memory.clear()
 
     def rebuild_embeddings(self) -> Dict:
         """

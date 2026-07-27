@@ -6,7 +6,7 @@ streamlit==1.60.0
 
 # Environment configuration and Gemini client
 python-dotenv==1.2.2
-google-generativeai==0.8.6
+google-genai==1.64.0
 
 # Document loading and text processing
 langchain-community==0.4.2
@@ -16,7 +16,7 @@ docx2txt==0.9
 
 # Embeddings and persistent vector storage
 langchain-huggingface==1.2.2
+huggingface-hub==1.24.0
 sentence-transformers==5.6.0
 langchain-chroma==1.1.0
 chromadb==1.5.9
-torchvision
