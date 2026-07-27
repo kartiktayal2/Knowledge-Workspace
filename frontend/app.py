@@ -328,6 +328,12 @@ def handle_upload(staged_files: list) -> None:
 
             result = workspace.upload_documents([path])
 
+            # Duplicate detected by backend
+            if result.get("duplicate"):
+                status.update(label="⚠️ Duplicate document", state="complete")
+                st.toast(result["message"], icon="⚠️")
+                continue
+
             status.update(label="💾 Saving document...")
             progress.progress(90)
 
@@ -338,7 +344,7 @@ def handle_upload(staged_files: list) -> None:
             status.update(label="✅ Upload completed", state="complete")
 
             st.toast(
-                f"✅ {uploaded_file.name} uploaded successfully ({chunks_created} chunks)",
+                result["message"] + f" ({chunks_created} chunks)",
                 icon="✅",
             )
 
@@ -348,7 +354,7 @@ def handle_upload(staged_files: list) -> None:
             st.exception(exc)
 
             st.toast(
-                f"❌ Upload failed: {uploaded_file.name}",
+                f"❌ {str(exc)}",
                 icon="❌",
             )
 

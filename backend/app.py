@@ -574,6 +574,10 @@ class KnowledgeWorkspace:
         if not file_paths:
             raise EmptyUploadError("No files were provided to upload.")
 
+        print("\n" + "=" * 60)
+        print("[UPLOAD] Upload Started")
+        print("=" * 60)
+
         new_paths = []
 
         for path in file_paths:
@@ -583,22 +587,50 @@ class KnowledgeWorkspace:
                 new_paths.append(path)
 
         if not new_paths:
+            print("[UPLOAD] Duplicate file detected")
             return {
+                "success": False,
+                "duplicate": True,
+                "message": "Document already exists.",
                 "uploaded_files": [],
                 "chunks_created": 0,
             }
 
-        documents = self.processor.load_many(new_paths)
-        chunks = self.processor.split_documents(documents)
-        self.vector_manager.add_chunks(chunks)
+        try:
+            print("[1/4] Loading documents...")
+            documents = self.processor.load_many(new_paths)
+            print(f"✓ Loaded {len(documents)} document(s)")
 
-        for path in new_paths:
-            self.registered_files[os.path.basename(path)] = path
+            print("[2/4] Splitting documents...")
+            chunks = self.processor.split_documents(documents)
+            print(f"✓ Created {len(chunks)} chunks")
 
-        return {
-        "uploaded_files": [os.path.basename(p) for p in new_paths],
-        "chunks_created": len(chunks),
-        }
+            print("[3/4] Creating embeddings...")
+            self.vector_manager.add_chunks(chunks)
+            print("✓ Embeddings stored")
+
+            print("[4/4] Registering uploaded files...")
+            for path in new_paths:
+                self.registered_files[os.path.basename(path)] = path
+
+            print("✓ Upload completed successfully")
+            print("=" * 60)
+
+            return {
+                "success": True,
+                "duplicate": False,
+                "message": "Upload completed successfully.",
+                "uploaded_files": [os.path.basename(p) for p in new_paths],
+                "chunks_created": len(chunks),
+            }
+
+        except Exception as exc:
+            print("\n[UPLOAD FAILED]")
+            print(type(exc).__name__)
+            print(exc)
+            print("=" * 60)
+
+            raise
 
     def delete_document(self, source_name: str) -> None:
         """
